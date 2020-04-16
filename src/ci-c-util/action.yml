@@ -1,0 +1,36 @@
+#
+# C-Util Continuous Integration
+#
+# This is a Github-Actions wrapper for the `run-suite` script of the
+# C-Util CI. It exposes the same API as the `run-suite` script, but
+# via the Github-Actions API, bundled together with a container that
+# provides the required host system.
+#
+
+name: 'C-Util Continuous Integration'
+description: 'The Continuous Integration from the C-Util project'
+inputs:
+  m32:
+    description: 'Run additional round in 32bit mode'
+    required: false
+    default: 0
+  mesonargs:
+    description: 'Additional arguments to meson setup'
+    required: false
+    default: ''
+  source:
+    description: 'File system path to the source directory relative to the workspace'
+    required: false
+    default: ''
+  valgrind:
+    description: 'Run additional test round through valgrind'
+    required: false
+    default: 0
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  args:
+  - '--m32=${{ inputs.m32 }}'
+  - '--mesonargs=${{ inputs.mesonargs }}'
+  - '--source=/github/workspace/${{ inputs.source }}'
+  - '--valgrind=${{ inputs.valgrind }}'

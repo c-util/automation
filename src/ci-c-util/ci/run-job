@@ -1,0 +1,296 @@
+#!/bin/bash
+
+#
+# Runner for C-Util Continuous Integration Jobs
+#
+# This script runs a single continuous integration job of the C-Util CI suite.
+# A selection of jobs is pre-defined in this script, but you can always run
+# your own.
+#
+
+set -e
+
+#
+# Configuration
+#
+
+CI_COMMAND=${CI_COMMAND:-""}
+CI_JOB="none"
+CI_M32=0
+CI_MESONARGS=""
+CI_NL=$'\n'
+CI_SOURCE="."
+CI_VALGRIND=0
+
+#
+# Generic Helpers
+#
+
+failexit() { printf "==> ERROR: $1\n" "${@:2}"; exit 1; } >&2
+
+#
+# Usage Helper
+#
+
+usage() {
+        cat <<EOF
+${0##*/} [OPTIONS...]
+
+Runner for C-Util Continuous Integration Jobs
+
+Options:
+  -h --help                     Print this help message
+     --job=none                 Job to run
+     --m32=0                    Run in 32bit mode
+     --mesonargs=               Additional arguments to meson setup
+     --source=.                 Path to source directory
+     --valgrind=0               Run additional test round through valgrind
+EOF
+}
+
+#
+# Option Parsing
+#
+
+CI_OPTS="h"
+CI_LONGOPTS="help,job:,m32:,mesonargs:,source:,valgrind:"
+
+CI_R=$(getopt \
+        --options="${CI_OPTS}" \
+        --longoptions="${CI_LONGOPTS}" \
+        --name "${0##*/}" \
+        -- "$@")
+eval set -- "${CI_R}"
+
+while true ; do
+        case "$1" in
+        -h|--help)
+                usage
+                exit 1
+                ;;
+        --job)
+                CI_JOB="$2"
+                shift 2
+                ;;
+        --m32)
+                case "$2" in
+                "0"|"1")
+                        ;;
+                *)
+                        failexit '%s: invalid m32 argument value -- '\''%s'\' "${0##*/}" "$2"
+                        ;;
+                esac
+
+                CI_M32="$2"
+                shift 2
+                ;;
+        --mesonargs)
+                CI_MESONARGS="$2"
+                shift 2
+                ;;
+        --source)
+                CI_SOURCE="$2"
+                shift 2
+                ;;
+        --valgrind)
+                case "$2" in
+                "0"|"1")
+                        ;;
+                *)
+                        failexit '%s: invalid valgrind argument value -- '\''%s'\' "${0##*/}" "$2"
+                        ;;
+                esac
+
+                CI_VALGRIND="$2"
+                shift 2
+                ;;
+        --)
+                shift
+                break
+                ;;
+        *)
+                failexit '%s: internal error on argv -- '\''%s'\' "${0##*/}" "$1"
+                ;;
+        esac
+done
+
+if (( $# )) ; then
+        failexit '%s: invalid arguments -- '\''%s'\' "${0##*/}" "$1"
+fi
+
+CI_SOURCE="$(readlink -f "${CI_SOURCE}")"
+if [[ ! -d "${CI_SOURCE}" ]] ; then
+        failexit '%s: non-existant source directory -- '\''%s'\' "${0##*/}" "$2"
+fi
+
+#
+# Job Definition
+#
+# We support many built-in configurations to run the C-Util CI. These are all
+# customized to the C-Util requirements and coding-style. Feel free to add
+# further jobs here to suit your needs.
+#
+# Note that you can easily allow the caller to use `none` as job and then
+# make sure all environment variables are inherited, thus giving full control
+# to the caller.
+#
+
+CI_LIB_ENV=()
+CI_LIB_CFLAGS=()
+CI_LIB_CFLAGS_CLANG=()
+CI_LIB_CFLAGS_GCC=()
+
+CI_LIB_CFLAGS+=("-Wno-maybe-uninitialized")
+CI_LIB_CFLAGS+=("-Wno-unused-parameter")
+
+CI_LIB_CFLAGS+=("-Wdate-time")
+CI_LIB_CFLAGS+=("-Wdeclaration-after-statement")
+CI_LIB_CFLAGS+=("-Wendif-labels")
+CI_LIB_CFLAGS+=("-Wfloat-equal")
+CI_LIB_CFLAGS+=("-Wlogical-op")
+CI_LIB_CFLAGS+=("-Wmissing-include-dirs")
+CI_LIB_CFLAGS+=("-Wmissing-noreturn")
+CI_LIB_CFLAGS+=("-Wnested-externs")
+CI_LIB_CFLAGS+=("-Wredundant-decls")
+CI_LIB_CFLAGS+=("-Wshadow")
+CI_LIB_CFLAGS+=("-Wstrict-aliasing=3")
+CI_LIB_CFLAGS+=("-Wsuggest-attribute=noreturn")
+CI_LIB_CFLAGS+=("-Wundef")
+CI_LIB_CFLAGS+=("-Wwrite-strings")
+
+CI_LIB_CFLAGS+=("-g")
+CI_LIB_CFLAGS+=("-Werror")
+
+CI_LIB_CFLAGS_CLANG+=("-Wno-gnu-alignof-expression")
+CI_LIB_CFLAGS_CLANG+=("-Wno-unknown-warning-option")
+
+CI_LIB_CFLAGS_GCC+=("-Wno-error=type-limits")
+CI_LIB_CFLAGS_GCC+=("-Wno-error=missing-field-initializers")
+
+if (( CI_M32 )) ; then
+        CI_LIB_CFLAGS+=("-m32")
+        CI_LIB_ENV+=("PKG_CONFIG_LIBDIR='/usr/lib/pkgconfig:/usr/share/pkgconfig'")
+fi
+
+CI_JOB_LLVM=(
+        "CC=clang"
+        "CFLAGS='${CI_LIB_CFLAGS[*]} ${CI_LIB_CFLAGS_CLANG[*]} -O2'"
+        "${CI_LIB_ENV[@]}"
+)
+CI_JOB_GCC=(
+        "CC=gcc"
+        "CFLAGS='${CI_LIB_CFLAGS[*]} ${CI_LIB_CFLAGS_GCC[*]} -O2'"
+        "${CI_LIB_ENV[@]}"
+)
+CI_JOB_GCC_DEBUG=(
+        "CC=gcc"
+        "CFLAGS='${CI_LIB_CFLAGS[*]} ${CI_LIB_CFLAGS_GCC[*]} -O0'"
+        "${CI_LIB_ENV[@]}"
+)
+CI_JOB_GCC_OPTIMIZED=(
+        "CC=gcc"
+        "CFLAGS='${CI_LIB_CFLAGS[*]} ${CI_LIB_CFLAGS_GCC[*]} -O3'"
+        "${CI_LIB_ENV[@]}"
+)
+CI_JOB_GCC_NDEBUG=(
+        "CC=gcc"
+        "CFLAGS='${CI_LIB_CFLAGS[*]} ${CI_LIB_CFLAGS_GCC[*]} -O2 -DNDEBUG'"
+        "${CI_LIB_ENV[@]}"
+)
+
+#
+# Job Selection
+#
+
+CI_CMD_SETUP="meson setup"
+CI_CMD_SETUP+=" --buildtype debugoptimized"
+CI_CMD_SETUP+=" --warnlevel 2"
+
+if [[ ! -z "${CI_MESONARGS}" ]] ; then
+        CI_CMD_SETUP+=" ${CI_MESONARGS[@]}"
+fi
+
+CI_CMD_BUILD="ninja -v"
+
+CI_CMD_TEST_BASIC="meson test --print-errorlogs"
+
+CI_CMD_DEFAULT="${CI_CMD_SETUP} . ${CI_SOURCE}"
+CI_CMD_DEFAULT+="${CI_NL}${CI_NL}"
+CI_CMD_DEFAULT+="${CI_CMD_BUILD}"
+CI_CMD_DEFAULT+="${CI_NL}${CI_NL}"
+CI_CMD_DEFAULT+="${CI_CMD_TEST_BASIC}"
+
+if (( CI_VALGRIND )) ; then
+        CI_CMD_DEFAULT+="${CI_NL}${CI_NL}"
+        CI_CMD_DEFAULT+="CI_VALGRIND=1"
+        CI_CMD_DEFAULT+=" meson test"
+        CI_CMD_DEFAULT+=" --print-errorlogs"
+        CI_CMD_DEFAULT+=" --timeout-multiplier=16"
+        CI_CMD_DEFAULT+=" --wrapper="
+
+        CI_CMD_DEFAULT+="\""
+        CI_CMD_DEFAULT+="valgrind"
+        CI_CMD_DEFAULT+=" --gen-suppressions=all"
+        CI_CMD_DEFAULT+=" --trace-children=yes"
+        CI_CMD_DEFAULT+=" --leak-check=full"
+        CI_CMD_DEFAULT+=" --error-exitcode=1"
+        CI_CMD_DEFAULT+="\""
+fi
+
+case "${CI_JOB}" in
+c-util-llvm)
+        CI_COMMAND="export ${CI_JOB_LLVM[*]}"
+        CI_COMMAND+="${CI_NL}${CI_NL}"
+        CI_COMMAND+="${CI_CMD_DEFAULT}"
+        ;;
+c-util-gcc)
+        CI_COMMAND="export ${CI_JOB_GCC[*]}"
+        CI_COMMAND+="${CI_NL}${CI_NL}"
+        CI_COMMAND+="${CI_CMD_DEFAULT}"
+        ;;
+c-util-gcc-debug)
+        CI_COMMAND="export ${CI_JOB_GCC_DEBUG[*]}"
+        CI_COMMAND+="${CI_NL}${CI_NL}"
+        CI_COMMAND+="${CI_CMD_DEFAULT}"
+        ;;
+c-util-gcc-optimized)
+        CI_COMMAND="export ${CI_JOB_GCC_OPTIMIZED[*]}"
+        CI_COMMAND+="${CI_NL}${CI_NL}"
+        CI_COMMAND+="${CI_CMD_DEFAULT}"
+        ;;
+c-util-gcc-ndebug)
+        CI_COMMAND="export ${CI_JOB_GCC_NDEBUG[*]}"
+        CI_COMMAND+="${CI_NL}${CI_NL}"
+        CI_COMMAND+="${CI_CMD_DEFAULT}"
+        ;;
+none)
+        # Nothing to do, full environment was inherited from the caller.
+        ;;
+*)
+        failexit '%s: invalid job -- '\''%s'\' "${0##*/}" "${CI_JOB}"
+        ;;
+esac
+
+#
+# Export Configuration
+#
+
+if (( CI_M32 )) ; then
+        export CI_M32
+fi
+
+#
+# Job Execution
+#
+
+(
+        echo "-- DUMP RUN ----------------------------------------------------"
+        echo
+        echo "$CI_COMMAND"
+        echo
+        echo "-- BEGIN RUN ---------------------------------------------------"
+        echo
+        eval "$CI_COMMAND"
+        echo
+        echo "-- END RUN -----------------------------------------------------"
+)

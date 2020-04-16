@@ -1,0 +1,178 @@
+#!/bin/bash
+
+#
+# Runner for C-Util Continuous Integration Suites
+#
+# This script runs an entire suite of continuous integration jobs sequentially.
+# Usually, you would use the job-runner and execute all jobs in parallel.
+# However, if your infrastructure does not allow for that, this script will run
+# the entire pre-defined suite sequentially and report back any errors.
+#
+# The behavior of the suite can be controlled via some command-line options.
+# More will be added if required.
+#
+
+set -e
+
+#
+# Configuration
+#
+
+CI_JOBS=()
+CI_M32=0
+CI_MESONARGS=""
+CI_SOURCE="."
+CI_VALGRIND=0
+
+CI_JOBS+=("c-util-llvm")
+CI_JOBS+=("c-util-gcc")
+CI_JOBS+=("c-util-gcc-debug")
+CI_JOBS+=("c-util-gcc-optimized")
+CI_JOBS+=("c-util-gcc-ndebug")
+
+#
+# Generic Helpers
+#
+
+failexit() { printf "==> ERROR: $1\n" "${@:2}"; exit 1; } >&2
+
+#
+# Usage Helper
+#
+
+usage() {
+        cat <<EOF
+${0##*/} [OPTIONS...]
+
+Runner for C-Util Continuous Integration Suites
+
+Options:
+  -h --help                     Print this help message
+     --m32=0                    Run additional round in 32bit mode
+     --mesonargs=               Additional arguments to meson setup
+     --source=.                 Path to source directory
+     --valgrind=0               Run additional test round through valgrind
+EOF
+}
+
+#
+# Option Parsing
+#
+
+CI_OPTS="h"
+CI_LONGOPTS="help,m32:,mesonargs:,source:,valgrind:"
+
+CI_R=$(getopt \
+        --options="${CI_OPTS}" \
+        --longoptions="${CI_LONGOPTS}" \
+        --name "${0##*/}" \
+        -- "$@")
+eval set -- "${CI_R}"
+
+while true ; do
+        case "$1" in
+        -h|--help)
+                usage
+                exit 1
+                ;;
+        --m32)
+                case "$2" in
+                "0"|"1")
+                        ;;
+                *)
+                        failexit '%s: invalid m32 argument value -- '\''%s'\' "${0##*/}" "$2"
+                        ;;
+                esac
+
+                CI_M32="$2"
+                shift 2
+                ;;
+        --mesonargs)
+                CI_MESONARGS="$2"
+                shift 2
+                ;;
+        --source)
+                CI_SOURCE="$2"
+                shift 2
+                ;;
+        --valgrind)
+                case "$2" in
+                "0"|"1")
+                        ;;
+                *)
+                        failexit '%s: invalid valgrind argument value -- '\''%s'\' "${0##*/}" "$2"
+                        ;;
+                esac
+
+                CI_VALGRIND="$2"
+                shift 2
+                ;;
+        --)
+                shift
+                break
+                ;;
+        *)
+                failexit '%s: internal error on argv -- '\''%s'\' "${0##*/}" "$1"
+                ;;
+        esac
+done
+
+if (( $# )) ; then
+        failexit '%s: invalid arguments -- '\''%s'\' "${0##*/}" "$1"
+fi
+
+CI_SOURCE="$(readlink -f "${CI_SOURCE}")"
+if [[ ! -d "${CI_SOURCE}" ]] ; then
+        failexit '%s: non-existant source directory -- '\''%s'\' "${0##*/}" "$2"
+fi
+
+#
+# Run all jobs
+#
+
+run_job() {
+        local round="$1"
+        local job="$2"
+        local m32="$3"
+
+        echo "++ BEGIN +++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+        echo
+        echo "Job: '${job}'"
+        echo "m32: '${m32}'"
+        echo "Mesonargs: '${CI_MESONARGS}'"
+        echo "Source: '${CI_SOURCE}'"
+        echo "Valgrind: '${CI_VALGRIND}'"
+        echo
+
+        (
+                rm -rf "build-job-${round}"
+                mkdir "build-job-${round}"
+                cd "build-job-${round}"
+
+                /ci/run-job \
+                        --job "${job}" \
+                        --m32 "${m32}" \
+                        --mesonargs "${CI_MESONARGS}" \
+                        --source "${CI_SOURCE}" \
+                        --valgrind "${CI_VALGRIND}"
+        )
+
+        echo
+        echo "++ END +++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+}
+
+CI_I=0
+CI_M=0
+
+if (( CI_M32 )) ; then
+        CI_M32_ROUNDS=(0 1)
+else
+        CI_M32_ROUNDS=(0)
+fi
+
+for CI_M in "${CI_M32_ROUNDS[@]}" ; do
+        for CI_J in "${CI_JOBS[@]}" ; do
+                run_job "${CI_I}" "${CI_J}" "${CI_M}"
+                CI_I=$(( ${CI_I} + 1 ))
+        done
+done
