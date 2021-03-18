@@ -18,7 +18,7 @@ jobs:
       uses: actions/checkout@v2
       with:
         repository: c-util/c-rbtree
-        ref: master
+        ref: main
         path: c-rbtree
 
     - name: Run the C-Util CI (no m32, no valgrind)
